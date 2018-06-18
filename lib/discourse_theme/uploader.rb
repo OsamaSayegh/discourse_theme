@@ -15,17 +15,53 @@ class DiscourseTheme::Uploader
     tar = Archive::Tar::Minitar::Output.new(sgz)
 
     Dir.chdir(dir + "/../") do
+      renamed_files = []
       Find.find(File.basename(dir)) do |x|
-        Find.prune if File.basename(x) == "src"
-        Find.prune if File.basename(x)[0] == ?.
+        basename = File.basename(x)
+        Find.prune if basename == "src"
+        Find.prune if basename[0] == ?.
         next if File.directory?(x)
+        next if basename == "about.json"
+
+        if rename = (basename !~ /\A[\w\-\.\/]+\z/ && x =~ /\/assets\//)
+          new_basename = basename.gsub(/[^\w\.\/]/, "-")
+          old_name = x.dup
+          x = x.gsub(basename, new_basename)
+          File.rename(old_name, x)
+          regex = /^[^\/]*(?=(\/))\//
+          renamed_files << { old: old_name.gsub(regex, ""), new: x.gsub(regex, "") }
+        end
 
         Minitar.pack_file(x, tar)
+        File.rename(x, old_name) if rename
       end
+
+      if renamed_files.any?
+        json_str = File.read("#{dir}/about.json")
+        json = JSON.parse(json_str)
+
+        json["assets"]&.each do |k, v|
+          if renamed = renamed_files.find { |hash| hash[:old] == v }
+            json["assets"][k] = renamed[:new]
+          end
+        end
+
+        edit_file("#{dir}/about.json", json.to_json)
+      end
+
+      Minitar.pack_file("#{dir.split("/").last}/about.json", tar)
+      edit_file("#{dir}/about.json", json_str) if renamed_files.any?
     end
   ensure
     tar.close
     sgz.close
+  end
+
+  def edit_file(path, content)
+    File.open(path, "w") do |file|
+      file.write(content)
+      file.close
+    end
   end
 
   def diagnose_errors(json)
